@@ -1,0 +1,139 @@
+
+Pinescript code.txt
+
+100%
+//@version=6
+indicator("Fibonacci Circles (Robust & Smooth) - Fixed", overlay=true, max_lines_count=500)
+
+// ---------------------- USER INPUTS ----------------------
+src = input.source(close, "Source")
+length = input.int(100, "Regression Length", minval=5)
+showRegression = input.bool(true, "Show Regression Line")
+regressionColor = input.color(color.orange, "Regression Color")
+
+anchorMode = input.string("Midpoint", "Anchor Mode", options=["Midpoint", "Latest Bar", "Fixed Offset"])
+barOffset = input.int(50, "Bar Offset (if Fixed)", minval=0)
+
+radiusMode = input.string("Auto (Price Range)", "Radius Mode", options=["Auto (Price Range)", "Manual"])
+manualRadius = input.float(50.0, "Manual Base Radius", minval=0.1)
+radiusMultiplier = input.float(1.0, "Auto Radius Multiplier", minval=0.1, maxval=2.0, step=0.1)
+
+stepsBase = input.int(120, "Base Circle Smoothness", minval=24, maxval=360)
+circleExpansionBars = input.int(200, "Horizontal Scale (bars, 0 = auto)", minval=0, maxval=2000)
+horizontalScaleFix = input.float(1.0, "Horizontal Scale Adjust", step=0.1, tooltip="Tweak if circles look too flat or stretched")
+
+show0236 = input.bool(true, "Show 0.236")
+show0382 = input.bool(true, "Show 0.382")
+show0500 = input.bool(true, "Show 0.500")
+show0618 = input.bool(true, "Show 0.618")
+show0786 = input.bool(true, "Show 0.786")
+show1000 = input.bool(true, "Show 1.000")
+show1618 = input.bool(false, "Show 1.618")
+show2618 = input.bool(false, "Show 2.618")
+
+baseColor = input.color(color.new(color.yellow, 30), "Circle Color")
+lineWidth = input.int(1, "Line Width", minval=1, maxval=4)
+
+// ---------------------- REGRESSION (optional display) ----------------------
+reg = ta.linreg(src, length, 0)
+plot(showRegression ? reg : na, "Regression Line", color=regressionColor, linewidth=2)
+
+// ---------------------- ANCHOR + BASE RADIUS ----------------------
+midOffset = int(math.floor(length / 2))
+
+anchorBar = switch anchorMode
+    "Latest Bar" => bar_index
+    "Fixed Offset" => bar_index - barOffset
+    => bar_index - midOffset  // Midpoint
+
+anchorPrice = switch anchorMode
+    "Latest Bar" => close
+    "Fixed Offset" => (bar_index > barOffset ? close[barOffset] : close)
+    => ta.linreg(src, length, midOffset) // Midpoint
+
+priceTop = ta.highest(high, length)
+priceBot = ta.lowest(low, length)
+
+// determine base radius so 1.0 fib touches farthest extreme in the window
+autoBase = math.max(math.abs(priceTop - anchorPrice), math.abs(anchorPrice - priceBot))
+baseRadius = radiusMode == "Manual" ? manualRadius : (autoBase * radiusMultiplier)
+baseRadius := math.max(baseRadius, syminfo.mintick * 10)
+
+// horizontal radius (bars)
+radiusBars = (circleExpansionBars > 0) ? float(circleExpansionBars) : float(int(math.floor(length / 2)))
+radiusBars := radiusBars * horizontalScaleFix
+
+// ---------------------- FIB LEVELS & TOGGLES (robust) ----------------------
+fibLevels = array.from(0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.618, 2.618)
+
+// build toggles explicitly to avoid array.from(input.bool(...)) pitfalls
+fibToggles = array.new_bool()
+array.push(fibToggles, show0236)
+array.push(fibToggles, show0382)
+array.push(fibToggles, show0500)
+array.push(fibToggles, show0618)
+array.push(fibToggles, show0786)
+array.push(fibToggles, show1000)
+array.push(fibToggles, show1618)
+array.push(fibToggles, show2618)
+
+// count active levels
+activeCount = 0
+for ti = 0 to array.size(fibToggles) - 1
+    activeCount := activeCount + (array.get(fibToggles, ti) ? 1 : 0)
+
+// ---------------------- SAFEGUARDS for lines / segments ----------------------
+// TradingView object limits — keep a margin under max_lines_count declared at indicator()
+allowed_lines = 480  // conservative cap
+// (we will cap steps per circle depending on how many fib levels are active)
+
+// ---------------------- DRAW CIRCLES ----------------------
+var line[] circleSegments = array.new_line()
+
+if barstate.islast
+    // delete old segments safely (only when present)
+    if array.size(circleSegments) > 0
+        for di = 0 to array.size(circleSegments) - 1
+            segId = array.get(circleSegments, di)
+            if not na(segId)
+                line.delete(segId)
+        array.clear(circleSegments)
+
+    // draw only if there are active levels
+    if activeCount > 0 and array.size(fibLevels) > 0 and array.size(fibToggles) > 0
+        for fibIdx = 0 to array.size(fibLevels) - 1
+            // guard before accessing toggles
+            if array.size(fibToggles) > fibIdx and array.get(fibToggles, fibIdx)
+                fib = array.get(fibLevels, fibIdx)
+                radiusPrice = baseRadius * fib
+                radiusBarsFib = radiusBars * fib
+
+                // desired smoothness scales with horizontal radius
+                desiredSteps = int(math.min(360.0, math.max(60.0, math.round(radiusBarsFib * 0.8))))
+                // cap steps so total lines won't exceed allowed_lines
+                maxStepsPerCircle = math.max(6, int(math.floor(allowed_lines / activeCount)))
+                effectiveSteps = int(math.min(desiredSteps, maxStepsPerCircle))
+                effectiveSteps := math.max(6, effectiveSteps)  // safety floor
+
+                angleStep = 2 * math.pi / effectiveSteps
+                for j = 0 to effectiveSteps - 1
+                    a1 = j * angleStep
+                    a2 = (j + 1) * angleStep
+
+                    // x anchored in bar indices (rounded); y in price units
+                    x1 = int(math.round(anchorBar + radiusBarsFib * math.cos(a1)))
+                    y1 = anchorPrice + radiusPrice * math.sin(a1)
+                    x2 = int(math.round(anchorBar + radiusBarsFib * math.cos(a2)))
+                    y2 = anchorPrice + radiusPrice * math.sin(a2)
+
+                    col = color.new(baseColor, math.min(90, 10 + fibIdx * 10))
+                    seg = line.new(x1, y1, x2, y2, xloc = xloc.bar_index, color = col, width = lineWidth)
+                    array.push(circleSegments, seg)
+
+// ---------------------- ANCHOR MARKER ----------------------
+var label anchorLabel = na
+if barstate.islast
+    if not na(anchorLabel)
+        label.delete(anchorLabel)
+    anchorLabel := label.new(anchorBar, anchorPrice, "◎", style = label.style_label_center, color = color.new(color.red, 0), textcolor = color.white, size = size.small)
+Displaying Pinescript code.txt.
