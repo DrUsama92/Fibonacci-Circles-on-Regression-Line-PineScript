@@ -136,4 +136,3 @@ if barstate.islast
     if not na(anchorLabel)
         label.delete(anchorLabel)
     anchorLabel := label.new(anchorBar, anchorPrice, "◎", style = label.style_label_center, color = color.new(color.red, 0), textcolor = color.white, size = size.small)
-Displaying Pinescript code.txt.
